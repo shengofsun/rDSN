@@ -52,6 +52,7 @@
 #include <dsn/tool-api/task_queue.h>
 #include <dsn/cpp/serialization.h>
 #include <dsn/cpp/clientlet.h>
+#include <dsn/dist/replication/replication.codes.h>
 #include <set>
 
 namespace dsn {
@@ -422,6 +423,9 @@ rpc_engine::rpc_engine(service_node *node) : _node(node), _rpc_matcher(this)
     dassert(_node != nullptr, "");
     _is_running = false;
     _is_serving = false;
+
+    // TODO: find a better section
+    _need_auth = dsn_config_get_value_bool("kerberos", "open_auth", false, "whether open auth");
 }
 
 //
@@ -633,6 +637,15 @@ void rpc_engine::on_recv_request(network *net, message_ex *msg, int delay_ms)
                   msg->header->rpc_name,
                   msg->header->from_address.to_string(),
                   msg->header->trace_id);
+
+            if (code == RPC_NEGOTIATION) {
+                message_ex *response = reinterpret_cast<message_ex *>(dsn_msg_create_response(msg));
+                response->add_ref();
+                reply(response, ERR_AUTH_FAILED);
+                response->release_ref();
+            } else {
+                // we do nothing just ignore
+            }
 
             dassert(msg->get_count() == 0, "request should not be referenced by anybody so far");
             delete msg;

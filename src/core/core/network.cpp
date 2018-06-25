@@ -38,6 +38,9 @@
 #endif
 #include <dsn/tool-api/network.h>
 #include <dsn/utility/factory_store.h>
+#include <dsn/dist/replication/replication.codes.h>
+#include <dsn/security/client_negotiation.h>
+#include <dsn/security/server_negotiation.h>
 #include "message_parser_manager.h"
 #include "rpc_engine.h"
 
@@ -77,14 +80,32 @@ void rpc_session::set_connected()
 
     {
         utils::auto_lock<utils::ex_lock_nr> l(_lock);
-        dassert(_connect_state == SS_CONNECTING, "session must be connecting");
+        dassert(_connect_state == SS_NEGOTIATION ||
+                    (_connect_state == SS_CONNECTING && !net().need_auth_connection()),
+                "wrong session state");
         _connect_state = SS_CONNECTED;
+        for (const auto &msg : _msg_buf) {
+            msg->dl.insert_before(&_messages);
+            ++_message_count;
+        }
+        _msg_buf.clear();
     }
 
     rpc_session_ptr sp = this;
     _net.on_client_session_connected(sp);
 
     on_rpc_session_connected.execute(this);
+}
+
+void rpc_session::set_negotiation()
+{
+    dassert(is_client(), "must be client session");
+
+    {
+        utils::auto_lock<utils::ex_lock_nr> l(_lock);
+        dassert(_connect_state == SS_CONNECTING, "session must be connecting");
+        _connect_state = SS_NEGOTIATION;
+    }
 }
 
 bool rpc_session::set_disconnected()
@@ -139,6 +160,28 @@ void rpc_session::clear_send_queue(bool resend_msgs)
         msg->release_ref();
     }
 
+    swapped_sending_msgs.clear();
+    {
+        utils::auto_lock<utils::ex_lock_nr> l(_lock);
+        _msg_buf.swap(swapped_sending_msgs);
+    }
+    // resend pending messages if need
+    for (auto &msg : swapped_sending_msgs) {
+        msg->dl.remove();
+        if (resend_msgs) {
+            _net.send_message(msg);
+        }
+
+        // if not resend, the message's callback will not be invoked until timeout,
+        // it's too slow - let's try to mimic the failure by recving an empty reply
+        else if (msg->header->context.u.is_request && !msg->header->context.u.is_forwarded) {
+            _net.on_recv_reply(msg->header->id, nullptr, 0);
+        }
+
+        // added in rpc_engine::reply (for server) or rpc_session::send_message (for client)
+        msg->release_ref();
+    }
+
     while (true) {
         dlink *msg;
         {
@@ -168,6 +211,8 @@ void rpc_session::clear_send_queue(bool resend_msgs)
         rmsg->release_ref();
     }
 }
+
+void rpc_session::on_failure(bool is_write) {}
 
 inline bool rpc_session::unlink_message_for_send()
 {
@@ -253,7 +298,11 @@ int rpc_session::prepare_parser()
     return 0;
 }
 
-void rpc_session::send_message(message_ex *msg)
+void rpc_session::send_message(message_ex *msg) { send_message_internal(msg, false); }
+
+void rpc_session::send_negotiation_message(message_ex *msg) { send_message_internal(msg, true); }
+
+void rpc_session::send_message_internal(message_ex *msg, bool is_negotiation_msg)
 {
     msg->add_ref(); // released in on_send_completed
 
@@ -265,19 +314,41 @@ void rpc_session::send_message(message_ex *msg)
     uint64_t sig;
     {
         utils::auto_lock<utils::ex_lock_nr> l(_lock);
-        msg->dl.insert_before(&_messages);
-        ++_message_count;
 
-        if (SS_CONNECTED == _connect_state && !_is_sending_next) {
-            _is_sending_next = true;
-            sig = _message_sent + 1;
-            unlink_message_for_send();
+        // Attention:
+        // here we only allow two cases to send message:
+        //  case 1: session's state is SS_CONNECTED
+        //  case 2: session's is sending negotiation message
+        if (SS_CONNECTED == _connect_state || is_negotiation_msg) {
+            if (is_negotiation_msg) {
+                if (is_client()) {
+                    dassert(SS_NEGOTIATION == _connect_state, "invalid rpc_session state");
+                } else {
+                    // the server's state of rpc_session is SS_CONNECTED
+                }
+            }
+            msg->dl.insert_before(&_messages);
+            ++_message_count;
+
+            if (!_is_sending_next) {
+                _is_sending_next = true;
+                sig = _message_sent + 1;
+                unlink_message_for_send();
+            } else { // is under send msg, just return
+                return;
+            }
         } else {
+            dassert(_connect_state != SS_CONNECTED, "invalid session state");
+            _msg_buf.push_back(msg);
             return;
         }
     }
-
     this->send(sig);
+}
+
+void rpc_session::do_read_negotiation_msg(int read_nex, std::function<void(message_ex *)> &&cb)
+{
+    // do nothing
 }
 
 bool rpc_session::cancel(message_ex *request)
@@ -417,7 +488,18 @@ bool rpc_session::on_recv_message(message_ex *msg, int delay_ms)
             return false;
         }
 
-        dbg_dassert(!is_client(), "only rpc server session can recv rpc requests");
+        // dbg_dassert(!is_client(), "only rpc server session can recv rpc requests");
+        if (is_client()) {
+            if (msg->rpc_code() == RPC_NEGOTIATION) {
+                // client open auth but server don't open auth, so we must close this connection
+                derror("rpc_session open failed, because server need auth, but client don't "
+                       "support auth");
+                delete msg;
+                return false;
+            } else {
+                dassert(false, "only rpc server session can recv rpc requests");
+            }
+        }
         _net.on_recv_request(msg, delay_ms);
     }
 
@@ -429,6 +511,32 @@ bool rpc_session::on_recv_message(message_ex *msg, int delay_ms)
     }
 
     return true;
+}
+
+void rpc_session::negotiation()
+{
+    if (is_client()) {
+        _client_negotiation = std::make_shared<dsn::security::client_negotiation>(this);
+        _client_negotiation->negotiate();
+    } else {
+        _server_negotiation = std::make_shared<dsn::security::server_negotiation>(this);
+        _server_negotiation->negotiate();
+    }
+}
+
+void rpc_session::complete_negotiation(bool succ)
+{
+    if (succ) {
+        if (is_client()) {
+            set_connected();
+            on_send_completed();
+            start_read_next();
+        } else {
+            start_read_next();
+        }
+    } else {
+        on_failure(true);
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -686,5 +794,10 @@ void connection_oriented_network::on_client_session_disconnected(rpc_session_ptr
                s->remote_address().to_string(),
                scount);
     }
+}
+
+bool connection_oriented_network::need_auth_connection()
+{
+    return engine()->need_auth_connection();
 }
 }

@@ -128,6 +128,19 @@ thrift_description = [
                 "remove": ["\"cli_types.h\""]
             }
         }
+    },
+    {
+        "name": "security",
+        "path": "src/core/security",
+        "file_move": {
+            ".types.h _types.h": "include/dsn/security"
+        },
+        "include_fix": {
+            "_types.cpp": {
+                "add": ["<dsn/security/security_types.h>"],
+                "remove": ["\"security_types.h\""]
+            }
+        }
     }
 ]
 

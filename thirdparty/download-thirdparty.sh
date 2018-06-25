@@ -188,4 +188,18 @@ check_and_download "fmt-4.0.0.tar.gz"\
     "fmt-4.0.0"
 exit_if_fail $?
 
+# krb5
+check_and_download "krb5-1.16.1.tar.gz" \
+    "https://web.mit.edu/kerberos/dist/krb5/1.16/krb5-1.16.1.tar.gz" \
+    "848e9b80d6aaaa798e3f3df24b83c407" \
+    "krb5-1.16.1"
+exit_if_fail $?
+
+# cyrus-sasl
+check_and_download "cyrus-sasl-2.1.27-rc8.tar.gz" \
+    "https://www.cyrusimap.org/releases/cyrus-sasl-2.1.27-rc8.tar.gz" \
+    "c34dd4034dcfd4760a90acadb9e0b6b7" \
+    "cyrus-sasl-2.1.27"
+exit_if_fail $?
+
 cd $TP_DIR

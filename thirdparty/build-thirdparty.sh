@@ -262,3 +262,27 @@ if [ ! -d $TP_OUTPUT/include/fds ]; then
 else
     echo "skip build fds"
 fi
+
+# build krb5
+if [ ! -d $TP_OUTPUT/include/krb5 ]; then
+    cd $TP_SRC/krb5-1.16.1/src
+    ./configure --prefix=$TP_OUTPUT
+    make -j 8 && make install
+    res=$?
+    cd $TP_DIR
+    exit_if_fail "krb5" $res
+else
+    echo "skip build krb5"
+fi
+
+# build cyrus-sasl
+if [ ! -d $TP_OUTPUT/include/sasl ]; then
+    cd $TP_SRC/cyrus-sasl-2.1.27
+    ./configure --prefix=$TP_OUTPUT
+    make -j 8 && make install
+    res=$?
+    cd $TP_DIR
+    exit_if_fail "cyrus-sasl" $res
+else
+    echo "skip build cyrus-sasl"
+fi

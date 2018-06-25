@@ -185,6 +185,8 @@ public:
     // to be defined
     virtual rpc_session_ptr create_client_session(::dsn::rpc_address server_addr) = 0;
 
+    bool need_auth_connection();
+
 protected:
     typedef std::unordered_map<::dsn::rpc_address, rpc_session_ptr> client_sessions;
     client_sessions _clients; // to_address => rpc_session
@@ -198,6 +200,12 @@ protected:
 /*!
   session managements (both client and server types)
 */
+
+namespace security {
+class client_negotiation;
+class server_negotiation;
+}
+
 class rpc_client_matcher;
 class rpc_session : public ref_counter
 {
@@ -224,9 +232,16 @@ public:
     connection_oriented_network &net() const { return _net; }
     message_parser_ptr parser() const { return _parser; }
     DSN_API void send_message(message_ex *msg);
+    void send_negotiation_message(message_ex *msg);
     DSN_API bool cancel(message_ex *request);
     void delay_recv(int delay_ms);
     DSN_API bool on_recv_message(message_ex *msg, int delay_ms);
+
+    // for negotiation
+    void negotiation();
+    void complete_negotiation(bool succ);
+    // util functions for negotiation send/recv msg
+    virtual void do_read_negotiation_msg(int read_next, std::function<void(message_ex *)> &&cb);
 
     // for client session
 public:
@@ -259,6 +274,7 @@ protected:
 protected:
     DSN_API bool try_connecting(); // return true when it is permitted
     DSN_API void set_connected();
+    void set_negotiation();
     DSN_API bool set_disconnected(); // return true when it is permitted
     bool is_disconnected() const { return _connect_state == SS_DISCONNECTED; }
     bool is_connecting() const { return _connect_state == SS_CONNECTING; }
@@ -269,6 +285,8 @@ private:
     // return whether there are messages for sending; should always be called in lock
     DSN_API bool unlink_message_for_send();
     DSN_API void clear_send_queue(bool resend_msgs);
+    virtual void on_failure(bool is_write = false);
+    void send_message_internal(message_ex *msg, bool is_negotiation_msg);
 
 protected:
     // constant info
@@ -290,6 +308,7 @@ private:
     enum session_state
     {
         SS_CONNECTING,
+        SS_NEGOTIATION,
         SS_CONNECTED,
         SS_DISCONNECTED
     };
@@ -299,11 +318,16 @@ private:
     volatile bool _is_sending_next;
     int _message_count; // count of _messages
     dlink _messages;
+    std::vector<message_ex *> _msg_buf;
     volatile session_state _connect_state;
     uint64_t _message_sent;
     // ]
 
     std::atomic_int _delay_server_receive_ms;
+
+    // for negotiation
+    std::shared_ptr<security::client_negotiation> _client_negotiation;
+    std::shared_ptr<security::server_negotiation> _server_negotiation;
 };
 
 // --------- inline implementation --------------

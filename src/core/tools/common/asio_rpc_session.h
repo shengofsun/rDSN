@@ -56,13 +56,17 @@ public:
     virtual void send(uint64_t signature) override { return write(signature); }
     virtual void close_on_fault_injection() override { safe_close(); }
 
+    // for negotiation
+    virtual void do_read_negotiation_msg(int read_next,
+                                         std::function<void(message_ex *)> &&cb) override;
+
 public:
     virtual void connect() override;
 
 private:
     virtual void do_read(int read_next) override;
     void write(uint64_t signature);
-    void on_failure(bool is_write = false);
+    void on_failure(bool is_write = false) override;
     void set_options();
     void on_message_read(message_ex *msg)
     {

@@ -33,6 +33,9 @@
  *     xxxx-xx-xx, author, fix bug about xxx
  */
 
+#include <dsn/security/client_negotiation.h>
+#include <dsn/security/server_negotiation.h>
+
 #include "asio_rpc_session.h"
 
 namespace dsn {
@@ -170,8 +173,6 @@ asio_rpc_session::asio_rpc_session(asio_network_provider &net,
     : rpc_session(net, remote_addr, parser, is_client), _socket(socket)
 {
     set_options();
-    if (!is_client)
-        start_read_next();
 }
 
 void asio_rpc_session::on_failure(bool is_write)
@@ -204,9 +205,14 @@ void asio_rpc_session::connect()
                 dinfo("client session %s connected", _remote_addr.to_string());
 
                 set_options();
-                set_connected();
-                on_send_completed();
-                start_read_next();
+                if (net().need_auth_connection()) {
+                    set_negotiation();
+                    negotiation();
+                } else {
+                    set_connected();
+                    on_send_completed();
+                    start_read_next();
+                }
             } else {
                 derror("client session connect to %s failed, error = %s",
                        _remote_addr.to_string(),
@@ -216,6 +222,58 @@ void asio_rpc_session::connect()
             release_ref();
         });
     }
+}
+
+void asio_rpc_session::do_read_negotiation_msg(int read_next,
+                                               std::function<void(message_ex *)> &&callback)
+{
+    add_ref();
+
+    void *ptr = _reader.read_buffer_ptr(read_next);
+    int remaining = _reader.read_buffer_capacity();
+
+    _socket->async_read_some(
+        boost::asio::buffer(ptr, remaining),
+        [ this, cb = std::move(callback) ](boost::system::error_code ec, std::size_t length) {
+            if (!!ec) {
+                if (ec == boost::asio::error::make_error_code(boost::asio::error::eof)) {
+                    ddebug("asio read from %s failed: %s",
+                           _remote_addr.to_string(),
+                           ec.message().c_str());
+                } else {
+                    derror("asio read from %s failed: %s",
+                           _remote_addr.to_string(),
+                           ec.message().c_str());
+                }
+                cb(nullptr);
+            } else {
+                _reader.mark_read(length);
+
+                int read_next = -1;
+
+                if (!_parser) {
+                    read_next = prepare_parser();
+                }
+
+                if (_parser) {
+                    message_ex *msg = _parser->get_message_on_receive(&_reader, read_next);
+                    if (msg != nullptr) {
+                        cb(msg);
+                    } else {
+                        do_read_negotiation_msg(
+                            read_next,
+                            std::move(const_cast<std::function<void(message_ex *)> &>(cb)));
+                    }
+                }
+
+                if (read_next == -1) {
+                    derror("asio read from %s failed", _remote_addr.to_string());
+                    cb(nullptr);
+                }
+            }
+
+            release_ref();
+        });
 }
 }
 }
