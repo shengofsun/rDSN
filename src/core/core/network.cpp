@@ -467,6 +467,29 @@ bool rpc_session::on_recv_message(message_ex *msg, int delay_ms)
     msg->to_address = _net.address();
     msg->io_session = this;
 
+    if (msg->rpc_code() == RPC_NEGOTIATION || msg->rpc_code() == RPC_NEGOTIATION_ACK) {
+        if (is_client()) {
+            // dassert(_client_negotiation != nullptr, "client negotiation should not be null");
+            if (_client_negotiation) {
+                _client_negotiation->handle_chanllenge_msg(msg);
+                return true;
+            } else {
+                // on_failure(true);
+                // client only receive message with RPC_NEGOTIATION_ACK
+                // complete_negotiation(true);
+            }
+        } else {
+            // dassert(_server_negotiation != nullptr, "server negotiation should not be null");
+            if (_server_negotiation) {
+                _server_negotiation->handle_response_msg(msg);
+                return true;
+            } else {
+                // do nothing, let rpc_engine to reply
+                // on_failure(false);
+            }
+        }
+    }
+
     if (msg->header->context.u.is_request) {
         // ATTENTION: need to check if self connection occurred.
         //
@@ -530,9 +553,9 @@ void rpc_session::complete_negotiation(bool succ)
         if (is_client()) {
             set_connected();
             on_send_completed();
-            start_read_next();
+            // start_read_next();
         } else {
-            start_read_next();
+            // start_read_next();
         }
     } else {
         on_failure(true);

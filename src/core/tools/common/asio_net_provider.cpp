@@ -138,12 +138,12 @@ void asio_network_provider::do_accept()
                                      null_parser,
                                      false);
             this->on_server_session_accepted(s);
-
+            s->start_read_next();
             if (need_auth_connection()) {
                 // start negotiation when server accept the connection
                 s->negotiation();
             } else {
-                s->start_read_next();
+                // s->start_read_next();
             }
         }
 

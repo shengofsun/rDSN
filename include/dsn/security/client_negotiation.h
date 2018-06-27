@@ -36,6 +36,7 @@ class client_negotiation
 public:
     client_negotiation(rpc_session *session);
     void negotiate();
+    void handle_chanllenge_msg(message_ex *msg);
 
 private:
     error_s do_sasl_client_init();

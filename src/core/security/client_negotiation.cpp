@@ -27,12 +27,9 @@ void client_negotiation::negotiate()
                 code.to_string(),
                 err_s.description().c_str());
         _session->complete_negotiation(false);
-    } else {
-        // wait for challenge msg from server
-        async_recv_negotiation_msg(
-            _session,
-            std::bind(&client_negotiation::handle_challenge_msg, this, std::placeholders::_1));
     }
+
+    // then we wait receive chanllenge message from server, see rpc_session::on_recv_msg()
 
     return;
 }
@@ -95,6 +92,20 @@ error_s client_negotiation::do_sasl_step(const std::string &input, std::string &
     return err_s;
 }
 
+void client_negotiation::handle_chanllenge_msg(message_ex *msg)
+{
+    if (msg->error() != ERR_OK) {
+        derror("client negotiation failed, error = %s", msg->error().to_string());
+        _session->complete_negotiation(false);
+    } else {
+        negotiation_message neg_msg;
+        ::dsn::unmarshall(msg, neg_msg);
+        handle_challenge_msg(neg_msg);
+    }
+    msg->add_ref();
+    msg->release_ref();
+}
+
 void client_negotiation::handle_challenge_msg(const negotiation_message &msg)
 {
     ddebug("client_negotiation: client recv negotiation message from server");
@@ -117,9 +128,7 @@ void client_negotiation::handle_challenge_msg(const negotiation_message &msg)
             resp.status = negotiation_status::type::SASL_RESPONSE;
             resp.msg = response_msg;
             async_send_negotiation_msg(_session, resp);
-            async_recv_negotiation_msg(
-                _session,
-                std::bind(&client_negotiation::handle_challenge_msg, this, std::placeholders::_1));
+            // wait recv response message from client, see rpc_session::on_recv_message()
             return;
         }
     } else if (msg.status == negotiation_status::type::SASL_SUCC) {

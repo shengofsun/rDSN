@@ -70,36 +70,25 @@ inline void async_send_negotiation_msg(rpc_session_ptr session, const negotiatio
     session->send_negotiation_message(reinterpret_cast<message_ex *>(msg));
 }
 
-inline void async_recv_negotiation_msg(rpc_session_ptr session, negotiation_recv_callback &&cb)
+// Notice: this function will try to release req automatically, if caller want use req after this
+// function, you should add_ref before call this function
+inline void async_response_negotiation_msg(rpc_session_ptr session,
+                                           message_ex *req,
+                                           const negotiation_message &resp)
 {
     dassert(session != nullptr, "invalid rpc_session");
-    auto new_callback = [ session, callback = std::move(cb) ](message_ex * msg)
-    {
-        if (msg == nullptr) {
-            // if we recv an empty negotaition message, then we just think it as fauilure
-            session->complete_negotiation(false);
-            dwarn("rpc_session recv negotiation message failed, remote addr = %s",
-                  session->remote_address().to_string());
-            return;
-        }
-        negotiation_message neg_msg;
-        // here, we only need msg with code == RPC_NEGOTIATION, otherwise, we think authentication
-        // fail
-        if (msg->rpc_code() == RPC_NEGOTIATION) {
-            ::dsn::unmarshall(msg, neg_msg);
-        } else {
-            neg_msg.status = negotiation_status::type::SASL_AUTH_FAIL;
-        }
+    message_ex *response = req->create_response();
+    strncpy(response->header->server.error_name,
+            ERR_OK.to_string(),
+            sizeof(response->header->server.error_name));
+    response->header->server.error_code.local_code = ERR_OK; // rpc is ok
+    response->header->server.error_code.local_hash = message_ex::s_local_hash;
+    ::dsn::marshall(response, resp);
+    session->send_message(response);
 
-        if (callback != nullptr) {
-            callback(neg_msg);
-        }
-        // TODO: maybe call delete msg directly
-        msg->add_ref();
-        msg->release_ref();
-    };
-
-    session->do_read_negotiation_msg(1024, std::move(new_callback));
+    // Don't use delete directly
+    req->add_ref();
+    req->release_ref();
 }
 
 } // end namespace security

@@ -36,15 +36,15 @@ class server_negotiation
 public:
     server_negotiation(rpc_session *session);
     void negotiate();
+    void handle_response_msg(message_ex *msg);
 
 private:
     error_s do_sasl_server_init();
-    void recv_sasl_initiate_msg();
     error_s do_sasl_server_start(const std::string &input, std::string &output);
     error_s do_sasl_step(const std::string &input, std::string &output);
-    void handle_response_msg(const negotiation_message &msg);
-    void send_challenge_msg(error_s err_s, const std::string &msg);
-    void send_auth_fail_msg(const std::string &msg);
+    void handle_response_msg(message_ex *req, const negotiation_message &msg);
+    void send_challenge_msg(error_s err_s, message_ex *req, const std::string &msg);
+    void send_auth_fail_msg(message_ex *req, const std::string &msg);
 
 private:
     // the lifetime of _session should be longer than client_negotiation

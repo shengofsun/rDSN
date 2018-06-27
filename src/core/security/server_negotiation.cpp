@@ -17,7 +17,7 @@ void server_negotiation::negotiate()
         return;
     }
 
-    recv_sasl_initiate_msg();
+    // wait receive init negotiation message from client, see rpc_session::on_recv_message()
 }
 
 error_s server_negotiation::do_sasl_server_init()
@@ -33,12 +33,6 @@ error_s server_negotiation::do_sasl_server_init()
     }
 
     return err_s;
-}
-
-void server_negotiation::recv_sasl_initiate_msg()
-{
-    async_recv_negotiation_msg(
-        _session, std::bind(&server_negotiation::handle_response_msg, this, std::placeholders::_1));
 }
 
 error_s server_negotiation::do_sasl_server_start(const std::string &input, std::string &output)
@@ -70,7 +64,14 @@ error_s server_negotiation::do_sasl_step(const std::string &input, std::string &
     return err_s;
 }
 
-void server_negotiation::handle_response_msg(const negotiation_message &msg)
+void server_negotiation::handle_response_msg(message_ex *msg)
+{
+    negotiation_message neg_msg;
+    ::dsn::unmarshall(msg, neg_msg);
+    handle_response_msg(msg, neg_msg);
+}
+
+void server_negotiation::handle_response_msg(message_ex *req, const negotiation_message &msg)
 {
     ddebug("server_negotiation: recv response negotiation message from client, addr = %s",
            _session->remote_address().to_string());
@@ -90,14 +91,11 @@ void server_negotiation::handle_response_msg(const negotiation_message &msg)
                    err_s.code().to_string(),
                    err_s.description().c_str(),
                    _session->remote_address().to_string());
-            send_auth_fail_msg(output);
+            send_auth_fail_msg(req, output);
         } else {
-            send_challenge_msg(err_s, output);
+            send_challenge_msg(err_s, req, output);
             if (err_s.code() == ERR_INCOMPLETE) {
-                async_recv_negotiation_msg(_session,
-                                           std::bind(&server_negotiation::handle_response_msg,
-                                                     this,
-                                                     std::placeholders::_1));
+                // wait receive response from client, see rpc_session::on_recv_message
             } else {
                 ddebug("negotiation: negotiation succ, remote addr = %s",
                        _session->remote_address().to_string());
@@ -109,34 +107,32 @@ void server_negotiation::handle_response_msg(const negotiation_message &msg)
         derror("server_negotiation: recv wrong neogtiation msg, type = %s, msg = %s",
                enum_to_string(msg.status),
                msg.msg.c_str());
-        send_auth_fail_msg("invalid response type"); //+ enum_to_string(msg.status));
+        send_auth_fail_msg(req, "invalid response type"); //+ enum_to_string(msg.status));
         return;
     }
     return;
 }
 
-void server_negotiation::send_challenge_msg(error_s err_s, const std::string &msg)
+void server_negotiation::send_challenge_msg(error_s err_s, message_ex *req, const std::string &msg)
 {
     const error_code &code = err_s.code();
     dassert(code == ERR_OK || code == ERR_INCOMPLETE, "invalid response message type");
     negotiation_message resp_msg;
     if (code == ERR_OK) {
-        // auth succ
         resp_msg.status = negotiation_status::type::SASL_SUCC;
     } else {
         resp_msg.status = negotiation_status::type::SASL_CHALLENGE;
     }
     resp_msg.msg = msg;
-    async_send_negotiation_msg(_session, resp_msg);
+    async_response_negotiation_msg(_session, req, resp_msg);
 }
 
-void server_negotiation::send_auth_fail_msg(const std::string &msg)
+void server_negotiation::send_auth_fail_msg(message_ex *req, const std::string &msg)
 {
     negotiation_message resp_msg;
     resp_msg.status = negotiation_status::type::SASL_AUTH_FAIL;
     resp_msg.msg = msg;
-    async_send_negotiation_msg(_session, resp_msg);
-
+    async_response_negotiation_msg(_session, req, resp_msg);
     _session->complete_negotiation(false);
 }
 
