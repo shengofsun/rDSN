@@ -1,5 +1,6 @@
 #include <dsn/security/sasl_utils.h>
 #include <dsn/c/api_utilities.h>
+#include <dsn/utility/config_api.h>
 
 namespace dsn {
 namespace security {
@@ -31,6 +32,8 @@ const char *logger_level_to_string(int level)
     }
 }
 
+static const char *plugins_search_path = nullptr;
+
 int sasl_simple_logger(void *context, int level, const char *msg)
 {
     // TODO: we can set a level to print sasl log info
@@ -44,11 +47,10 @@ int sasl_simple_logger(void *context, int level, const char *msg)
 
 int getpath(void *context, char **path)
 {
-    static char default_path[] = "/usr/lib/sasl2";
     if (!path) {
         return SASL_BADPARAM;
     }
-    *path = const_cast<char *>(default_path); // default path
+    *path = const_cast<char *>(plugins_search_path);
     return SASL_OK;
 }
 
@@ -78,12 +80,13 @@ int simple(void *context, int id, const char **result, unsigned *len)
 }
 
 sasl_callback_t client_callbacks[] = {{SASL_CB_USER, (sasl_callback_ft)&simple, nullptr},
+                                      {SASL_CB_GETPATH, (sasl_callback_ft)&getpath, nullptr},
                                       {SASL_CB_AUTHNAME, (sasl_callback_ft)&simple, nullptr},
                                       {SASL_CB_LOG, (sasl_callback_ft)&sasl_simple_logger, nullptr},
                                       {SASL_CB_LIST_END, nullptr, nullptr}};
 
 sasl_callback_t server_callbacks[] = {{SASL_CB_LOG, (sasl_callback_ft)&sasl_simple_logger, nullptr},
-                                      {SASL_CB_GETPATH, (sasl_callback_ft)&getpath, NULL},
+                                      {SASL_CB_GETPATH, (sasl_callback_ft)&getpath, nullptr},
                                       {SASL_CB_LIST_END, nullptr, nullptr}};
 
 // provide mutex function for sasl
@@ -154,6 +157,8 @@ error_s call_sasl_func(sasl_conn_t *conn, const std::function<int()> &call)
 
 error_s sasl_init(bool is_server)
 {
+    plugins_search_path = dsn_config_get_value_string(
+        "kerberos", "sasl_plugin_path", "/usr/lib/sasl2", "path to search sasl plugins");
     sasl_set_mutex_local();
     int err = 0;
     err = sasl_client_init(&client_callbacks[0]);
