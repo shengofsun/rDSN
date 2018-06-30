@@ -125,6 +125,10 @@ replica::~replica(void)
 
 void replica::on_client_read(task_code code, dsn_message_t request)
 {
+    if (_stub->options().serve_read_ignore_status) {
+        goto serve_read;
+    }
+
     if (status() == partition_status::PS_INACTIVE ||
         status() == partition_status::PS_POTENTIAL_SECONDARY) {
         derror("%s: invalid status: partition_status=%s", name(), enum_to_string(status()));
@@ -153,6 +157,7 @@ void replica::on_client_read(task_code code, dsn_message_t request)
         }
     }
 
+serve_read:
     dassert(_app != nullptr, "");
     _app->on_request(request);
 }

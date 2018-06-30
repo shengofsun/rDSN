@@ -100,6 +100,8 @@ replication_options::replication_options()
     learn_app_max_concurrent_count = 5;
 
     max_concurrent_uploading_file_count = 10;
+
+    serve_read_ignore_status = false;
 }
 
 replication_options::~replication_options() {}
@@ -466,6 +468,9 @@ void replication_options::initialize()
                                              "max_concurrent_uploading_file_count",
                                              max_concurrent_uploading_file_count,
                                              "concurrent uploading file count");
+
+    serve_read_ignore_status =
+        dsn_config_get_value_bool("replication", "serve_read_ignore_status", false, "");
 
     replica_helper::load_meta_servers(meta_servers);
 
